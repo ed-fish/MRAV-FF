@@ -531,9 +531,9 @@ class TriDet(nn.Module):
         # batch the video list into feats (B, C, T) and masks (B, 1, T)
         batched_inputs, batched_masks, batched_additional_feats = self.preprocessing(video_list)
         
-        gate_sample = self.auto_encoder_in(batched_additional_feats)
+        # gate_sample = self.auto_encoder_in(batched_additional_feats)
         
-        batched_additional_feats = batched_additional_feats * gate_sample 
+        # batched_additional_feats = batched_additional_feats * gate_sample 
 
         if self.additional_feature:
             batched_additional_feats = self.additional_embed(batched_additional_feats)
@@ -562,7 +562,7 @@ class TriDet(nn.Module):
                 out_feat = self.feat_merge(out_feat)
                 fpn_outs.append(out_feat)
         
-        fpn_feats = fpn_outs
+            fpn_feats = fpn_outs
 
         # out_cls: List[B, #cls + 1, T_i]
         out_cls_logits = self.cls_head(fpn_feats, fpn_masks)
