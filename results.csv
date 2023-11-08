@@ -1,0 +1,14 @@
+id,epoch,mAP,best_checkpoint_path
+test,2,0.2893099829388829,./ckpt/thumos_i3d_test/best.pth
+thumos_reproduce,34,0.6842870928804284,./ckpt/thumos_i3d_thumos_reproduce/best.pth
+thumos_audio_basic,32,0.6743534174294761,./ckpt/thumos_i3d_thumos_audio_basic/best.pth
+residual-concat-add,35,0.6704710543939855,./ckpt/thumos_i3d_residual-concat-add/best.pth
+concat-gelu,35,0.6769219025424607,./ckpt/thumos_i3d_concat-gelu/best.pth
+epic-audio,21,0.24281932657084765,./ckpt/epic_slowfast_verb_epic-audio/best.pth
+epic-reproduce,18,0.24370523325696233,./ckpt/epic_slowfast_verb_epic-reproduce/best.pth
+audio-test-2,22,0.24590198107118066,./ckpt/epic_slowfast_verb_audio-test-2/best.pth
+epic-verb-audio-gate,17,0.24117954126434507,./ckpt/epic_slowfast_verb_epic-verb-audio-gate/best.pth
+epic-verb-audio-concat,17,0.22461103117618694,./ckpt/epic_slowfast_verb_epic-verb-audio-concat/best.pth
+epic-verb-audio-gate_autoencoder,16,0.23970203085799896,./ckpt/epic_slowfast_verb_epic-verb-audio-gate_autoencoder/best.pth
+epic-verb-audio-gate_autoencoder-only-gate,21,0.24291438292883133,./ckpt/epic_slowfast_verb_epic-verb-audio-gate_autoencoder-only-gate/best.pth
+epic-verb-audio-early-gate,18,0.23201237501494396,./ckpt/epic_slowfast_verb_epic-verb-audio-early-gate/best.pth
