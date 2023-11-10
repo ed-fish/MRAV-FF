@@ -437,18 +437,27 @@ class TriDet(nn.Module):
                 )
                 
                 self.gating_embed = nn.Sequential( 
-                    nn.Conv1d(32, 16, kernel_size=1),
+                    nn.Conv1d(512, 128, kernel_size=1),
+                    
+                    nn.GroupNorm(16, 128),
                     nn.ReLU(),
-                    nn.Conv1d(16, 1, kernel_size=1),
-                    nn.Sigmoid()
+                    nn.Conv1d(128, 64, kernel_size=1), 
+                    nn.GroupNorm(16, 64),
+                    nn.ReLU(), 
+                    nn.Conv1d(64, 32, kernel_size=1),   
+                    nn.GroupNorm(16, 32),
+                    nn.ReLU(), 
+                    nn.Conv1d(32, 2, kernel_size=1),  
+                    nn.Softmax(dim=1)
                 )
                 
                 self.feat_merge = nn.Sequential( 
                     nn.Conv1d(embd_dim * 2, embd_dim, kernel_size=1),
                     nn.GroupNorm(16, embd_dim),
-                    nn.ReLU(),
-                    nn.Conv1d(embd_dim, embd_dim, kernel_size=1),
-                    nn.ReLU() 
+                    nn.ReLU(), 
+                    nn.Conv1d(embd_dim, embd_dim, kernel_size=1), 
+                    nn.GroupNorm(16, embd_dim),
+                    nn.ReLU(), 
                 )
                 
                 self.auto_encoder_in = nn.Sequential( 
@@ -463,6 +472,7 @@ class TriDet(nn.Module):
                 self.auto_encoder_out = nn.Sequential(
                     nn.Conv1d(32, embd_dim, kernel_size=1),
                 )
+                
 
         # maintain an EMA of #foreground to stabilize the loss normalizer
         # useful for small mini-batch training
@@ -558,8 +568,22 @@ class TriDet(nn.Module):
             for feat, add_feat in zip(fpn_feats, batched_add_feats):
                 # add_feat_gate = self.gating_embed(add_feat)
                 # add_feat = add_feat * add_feat_gate
-                out_feat = torch.cat((feat, add_feat), 1)
-                out_feat = self.feat_merge(out_feat)
+                if self.training:
+                    if torch.rand(1) < 0.4:
+                        add_feat = torch.zeros_like(add_feat)
+                    # else:
+                    #     feat = torch.zeros_like(feat)
+                # out_feat = torch.cat((feat, add_feat), 1)
+                gate = self.gating_embed(add_feat)
+                fused_feats = (gate[:, 0:1] * feat) + (gate[:, 1:2] * add_feat)
+                # fused_feats = torch.functional.F.normalize(fused_feats)
+                # out_feat = torch.cat(fused_feats[0], fused_feats[1], dim=1) 
+                # out_feat = self.feat_merge(out_feat)
+                out_feat = fused_feats + feat
+                
+                # out_feat = torch.functional.F.normalize(out_feat)
+                
+                    
                 fpn_outs.append(out_feat)
         
             fpn_feats = fpn_outs

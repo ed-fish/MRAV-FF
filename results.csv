@@ -12,3 +12,11 @@ epic-verb-audio-concat,17,0.22461103117618694,./ckpt/epic_slowfast_verb_epic-ver
 epic-verb-audio-gate_autoencoder,16,0.23970203085799896,./ckpt/epic_slowfast_verb_epic-verb-audio-gate_autoencoder/best.pth
 epic-verb-audio-gate_autoencoder-only-gate,21,0.24291438292883133,./ckpt/epic_slowfast_verb_epic-verb-audio-gate_autoencoder-only-gate/best.pth
 epic-verb-audio-early-gate,18,0.23201237501494396,./ckpt/epic_slowfast_verb_epic-verb-audio-early-gate/best.pth
+test,35,0.6522156828636179,./ckpt/thumos_i3d_test/best.pth
+big_test,38,0.661698425325976,./ckpt/thumos_i3d_big_test/best.pth
+big_test_2,36,0.6634818365012572,./ckpt/thumos_i3d_big_test_2/best.pth
+big_test_3,35,0.6583698915509337,./ckpt/thumos_i3d_big_test_3/best.pth
+gate_feats,14,0.25070494194561943,./ckpt/epic_slowfast_verb_gate_feats/best.pth
+audio-gate-large,22,0.23680981952271055,./ckpt/epic_slowfast_verb_audio-gate-large/best.pth
+large_gate_vision_first,45,0.6529256459284629,./ckpt/thumos_i3d_large_gate_vision_first/best.pth
+large_gate_vision_only_w_norm,31,0.663444161037565,./ckpt/thumos_i3d_large_gate_vision_only_w_norm/best.pth
