@@ -102,7 +102,7 @@ def truncate_feats(
     # feats: C x T
     data_dict['feats'] = data_dict['feats'][:, st:ed].clone()
     if 'additional_feats' in  data_dict.keys() and data_dict['additional_feats'] is not None:
-        data_dict['additional_feats'] = data_dict['additional_feats'][:, st:ed].clone()
+        data_dict['additional_feats'] = data_dict['additional_feats'][:,:,st:ed].clone()
     # segments: N x 2 in feature grids
     data_dict['segments'] = torch.stack((left[seg_idx], right[seg_idx]), dim=1)
     # shift the time stamps due to truncation

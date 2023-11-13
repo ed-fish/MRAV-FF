@@ -4,7 +4,7 @@ val_split: ['validation']
 dataset: {
   json_file: ./data/epic_kitchens_100_verb.json,
   feat_folder: /mnt/welles/scratch/datasets/epic-feats/epic_kitchens/features/,
-  additional_feat_folder: /mnt/welles/scratch/datasets/epic-vgg/,
+  additional_feat_folder: /mnt/welles/scratch/datasets/epic-audio,
   file_prefix: ~,
   file_ext: .npz,
   num_classes: 97,
@@ -14,7 +14,7 @@ dataset: {
   default_fps: 30,
   trunc_thresh: 0.3,
   crop_ratio: [0.9, 1.0],
-  max_seq_len: 2304,
+  max_seq_len: 800,
 }
 model: {
   regression_range: [[0, 4], [2, 8], [4, 16], [8, 32], [16, 64], [32, 10000]],
@@ -25,7 +25,7 @@ model: {
   iou_weight_power: 0.25,
   sgp_mlp_dim: 1024,
   k: 2,
-  additional_dim: 128,
+  additional_dim: 512,
   additional_feature: True,
   use_abs_pe: True,
   # additional_only: True

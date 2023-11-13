@@ -5,6 +5,11 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torch.nn import functional as F
+import torchaudio
+import soundfile as sf
+import math
+
+from scipy import signal
 
 from .datasets import register_dataset
 from .data_utils import truncate_feats
@@ -59,6 +64,9 @@ class EpicKitchensDataset(Dataset):
         self.num_classes = num_classes
         self.label_dict = None
         self.crop_ratio = crop_ratio
+        
+        self.norm_mean =  -4.984795570373535
+        self.norm_std =  3.7079780101776123
 
         # load database and select the subset
         dict_db, label_dict = self._load_json_db(self.json_file)
@@ -88,6 +96,77 @@ class EpicKitchensDataset(Dataset):
             if id not in label_ids:
                 empty_label_ids.append(id)
         return empty_label_ids
+    
+    # def _wav2fbank(self, filename, filename2=None, idx=None):
+    #     # mixup
+    #     if filename2 == None:
+    #         waveform, sr = torchaudio.load(filename)
+    #         waveform = waveform - waveform.mean()
+    #     # mixup
+    #     else:
+    #         waveform1, sr = torchaudio.load(filename)
+    #         waveform2, _ = torchaudio.load(filename2)
+
+    #         waveform1 = waveform1 - waveform1.mean()
+    #         waveform2 = waveform2 - waveform2.mean()
+
+    #         if waveform1.shape[1] != waveform2.shape[1]:
+    #             if waveform1.shape[1] > waveform2.shape[1]:
+    #                 # padding
+    #                 temp_wav = torch.zeros(1, waveform1.shape[1])
+    #                 temp_wav[0, 0:waveform2.shape[1]] = waveform2
+    #                 waveform2 = temp_wav
+    #             else:
+    #                 # cutting
+    #                 waveform2 = waveform2[0, 0:waveform1.shape[1]]
+
+    #         # sample lambda from uniform distribution
+    #         #mix_lambda = random.random()
+    #         # sample lambda from beta distribtion
+    #         mix_lambda = np.random.beta(10, 10)
+
+    #         mix_waveform = mix_lambda * waveform1 + (1 - mix_lambda) * waveform2
+    #         waveform = mix_waveform - mix_waveform.mean()
+        
+
+    #     ## yb: align ##
+    #     if waveform.shape[1] > 16000*(self.opt.audio_length+0.1):
+    #         sample_indx = np.linspace(0, waveform.shape[1] -16000*(self.opt.audio_length+0.1), num=10, dtype=int)
+    #         waveform = waveform[:,sample_indx[idx]:sample_indx[idx]+int(16000*self.opt.audio_length)]
+    #     ## align end ##
+
+
+    #     # if self.opt.vis_encoder_type == 'vit':
+    #     #     fbank = torchaudio.compliance.kaldi.fbank(waveform, htk_compat=True, sample_frequency=sr, use_energy=False, window_type='hanning', num_mel_bins=128, dither=0.0, frame_shift=10) ## original
+    #     #     # fbank = torchaudio.compliance.kaldi.fbank(waveform, htk_compat=True, sample_frequency=sr, use_energy=False, window_type='hanning', num_mel_bins=512, dither=0.0, frame_shift=1)
+    #     # elif self.opt.vis_encoder_type == 'swin':
+    #     fbank = torchaudio.compliance.kaldi.fbank(waveform, htk_compat=True, sample_frequency=sr, use_energy=False, window_type='hanning', num_mel_bins=192, dither=0.0, frame_shift=5.2)
+
+    #     ########### ------> very important: audio normalized
+    #     fbank = (fbank - self.norm_mean) / (self.norm_std * 2)
+    #     ### <--------
+    #     if self.opt.vis_encoder_type == 'vit':
+    #         target_length = int(1024 * (1/10)) ## for audioset: 10s
+    #     elif self.opt.vis_encoder_type == 'swin':
+    #         target_length = 192 ## yb: overwrite for swin
+
+    #     # target_length = 512 ## 5s
+    #     # target_length = 256 ## 2.5s
+    #     n_frames = fbank.shape[0]
+
+    #     p = target_length - n_frames
+
+    #     # cut and pad
+    #     if p > 0:
+    #         m = torch.nn.ZeroPad2d((0, 0, 0, p))
+    #         fbank = m(fbank)
+    #     elif p < 0:
+    #         fbank = fbank[0:target_length, :]
+
+    #     if filename2 == None:
+    #         return fbank, 0
+    #     else:
+    #         return fbank, mix_lambda
 
     def get_attributes(self):
         return self.db_attributes
@@ -170,19 +249,91 @@ class EpicKitchensDataset(Dataset):
         
         
         if self.use_addtional_feats:
-            additional_file_name = self.file_prefix + video_item['id'] + '.npy'
+            audio_length = 1
+            
+            
+            file_pre = "/mnt/welles/scratch/datasets/epic-audio/"
+            additional_file_name = file_pre + video_item['id'] + '.wav'
+            waveform, sample_rate = torchaudio.load(additional_file_name)
+            if waveform.shape[0] == 2:  # Check if stereo
+                waveform = torch.mean(waveform, dim=0, keepdim=True)
+
+            
+            window_length_secs = 0.025  # For example, 25ms
+            hop_length_secs = 0.010    # For example, 10ms
+
+            # Calculate window and hop lengths in samples
+            window_length_samples = int(round(sample_rate * window_length_secs))
+            hop_length_samples = int(round(sample_rate * hop_length_secs))
+
+            # Calculate FFT length (nearest power of 2)
+            fft_length = 2 ** int(np.ceil(np.log(window_length_samples) / np.log(2.0)))
+            mel_transformer = torchaudio.transforms.MelSpectrogram(sample_rate=sample_rate, n_fft=fft_length, win_length=window_length_samples, hop_length=hop_length_samples, n_mels=64)
+            mel_spectrogram = mel_transformer(waveform)
+
+            # Convert to log scale
+            log_mel_spectrogram = torch.log(mel_spectrogram + 1e-9)  # To avoid log(0)
+            
+            mean = torch.mean(log_mel_spectrogram)
+            std = torch.std(log_mel_spectrogram)
+            log_mel_spectrogram = torch.divide(log_mel_spectrogram-mean, std+1e-9)
+            
+            audio_feats = []
+            max_length = 208
+            
+            for feat_id in range(feats.shape[-1]):
+                # Calculate the start and end time of the video feature
+                video_feature_duration = 32 / 30  # Duration of video feature in seconds
+                feature_start_time = feat_id * (16 / 30)  # Start time of the video feature in seconds
+                feature_end_time = feature_start_time + video_feature_duration  # End time of the video feature
+
+                # Adjust start and end times for the desired audio segment duration
+                audio_segment_start_time = feature_start_time - (audio_length / 2)
+                audio_segment_end_time = feature_end_time + (audio_length / 2)
+
+                # Convert times to mel-spectrogram indices
+                # Here, we need to consider the frame rate of the mel-spectrogram
+                hop_length = mel_transformer.hop_length
+                start_index = math.floor(audio_segment_start_time * sample_rate / hop_length)
+                end_index = math.ceil(audio_segment_end_time * sample_rate / hop_length)
+
+                # Ensure indices are within bounds
+                start_index = max(start_index, 0)
+                end_index = min(end_index, log_mel_spectrogram.shape[-1])
+
+                # Extract the corresponding audio segment from the mel-spectrogram
+                audio_segment = log_mel_spectrogram[:, :, start_index:end_index]
+                if audio_segment.shape[-1] < max_length:
+                    padding_size = max_length - audio_segment.shape[-1]
+                    audio_segment = torch.nn.functional.pad(audio_segment, (0, padding_size), "constant", 0)
+                audio_feats.append(audio_segment)
+            additional_feats = torch.stack(audio_feats).squeeze()
+            additional_feats = additional_feats.permute(1, 2, 0)
+
+            # if samples.shape[0] > 16000*(audio_length+0.1):
+            #     sample_indx = np.linspace(0, samples.shape[0] -16000*(audio_length+0.1), num=feats.shape[-1], dtype=int)
+            #     samples = samples[sample_indx[idx]:sample_indx[idx]+int(16000*audio_length)]
+
+            # else:
+            #     # repeat in case audio is too short
+            #     samples = np.tile(samples,int(self.audio_length))[:int(16000*self.audio_length)]
+
+            # samples[samples > 1.] = 1.
+            # samples[samples < -1.] = -1.
+   
+            
             # path_folder = '/CV/datasets/thumos14/pose_heatmap'
-            additional_feats = np.load(
-                os.path.join(self.additional_feat_folder, additional_file_name))  # T, kpt_cls, height, width
-            additional_feats = torch.from_numpy(additional_feats).to(torch.float32)
+            # additional_feats = np.load(
+            #     os.path.join(self.additional_feat_folder, additional_file_name))  # T, kpt_cls, height, width
+            # additional_feats = torch.from_numpy(additional_feats).to(torch.float32)
 
-            if additional_feats.shape[0] == 1:
-                additional_feats = additional_feats.squeeze(0)
+            # if additional_feats.shape[0] == 1:
+            #     additional_feats = additional_feats.squeeze(0)
 
-            additional_feats = additional_feats.flatten(1)  # T, cls, height* width
-            additional_feats = additional_feats.transpose(0, 1)  # cls*height* width, T
-            additional_feats = \
-                F.interpolate(additional_feats[None], feats.shape[-1], mode='linear', align_corners=True)[0]
+            # additional_feats = additional_feats.flatten(1)  # T, cls, height* width
+            # additional_feats = additional_feats.transpose(0, 1)  # cls*height* width, T
+            # additional_feats = \
+            #     F.interpolate(additional_feats[None], feats.shape[-1], mode='linear', align_corners=True)[0]
         else:
             additional_feats = None
         

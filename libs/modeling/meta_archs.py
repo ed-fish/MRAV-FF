@@ -3,6 +3,9 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.nn.utils.rnn import pad_sequence
+from transformers import ASTForAudioClassification
+from .vggish import VGGish
+
 
 from .blocks import MaskedConv1D, Scale, LayerNorm
 from .losses import ctr_diou_loss_1d, sigmoid_focal_loss, ctr_giou_loss_1d
@@ -167,6 +170,34 @@ class RegHead(nn.Module):
 
         # fpn_masks remains the same
         return out_offsets
+    
+class AudioModel(nn.Module):
+    def __init__(self):
+        super(AudioModel, self).__init__()
+        urls = {
+            'vggish': "https://github.com/harritaylor/torchvggish/releases/download/v0.1/vggish-10086976.pth"
+        }
+        self.pretrain = VGGish(urls, preprocess=False, postprocess=False)
+
+        self.embeddings = nn.Sequential(
+            nn.Linear(26624, 4096),
+            nn.ReLU(True),
+            nn.Linear(4096, 4096),
+            nn.ReLU(True),
+            nn.Linear(4096, 512),
+            nn.ReLU(True))
+        
+    def forward(self, x):
+        """
+        :param x: [bs, num_frames, 96, 64]
+        :return:
+        """
+        bs, num_frames, _, _ = x.size()
+        x = self.pretrain(x) # [bs*num_frames, 128]
+        x = self.embeddings(x)
+        
+        x = x.view(bs, num_frames, -1)
+        return x
 
 
 @register_meta_arch("TriDet")
@@ -386,93 +417,19 @@ class TriDet(nn.Module):
             )
 
         if self.additional_feature:
-            self.pose_conv = False
-            if self.pose_conv:
-                # bz*T, cls, height, width
-                self.additional_embed = nn.Sequential(
-                    nn.Conv2d(7,
-                              embd_dim,
-                              kernel_size=(56, 56),
-                              stride=(1, 1),
-                              padding=(0, 0),
-                              bias=True,
-                              ),
-                    nn.GroupNorm(16, embd_dim),
-                    nn.ReLU(),
-                    nn.Conv2d(embd_dim,
-                              embd_dim,
-                              kernel_size=(1, 1),
-                              stride=(1, 1),
-                              padding=(0, 0),
-                              bias=True,
-                              ),
-                    nn.GroupNorm(16, embd_dim),
-                    nn.ReLU(),
-                    nn.Conv2d(embd_dim,
-                              embd_dim,
-                              kernel_size=(1, 1),
-                              stride=(1, 1),
-                              padding=(0, 0),
-                              bias=True,
-                              ),
-                    nn.GroupNorm(16, embd_dim),
-                    nn.ReLU(),
-                )
+            self.audio_net = AudioModel()
 
-                self.pose_temporal = nn.Sequential(
-                    nn.Conv1d(embd_dim, embd_dim, 3, 1, 1
-                              ),
-                    nn.ReLU()
-                )
 
-            else:
-                # change
-                self.additional_embed = nn.Sequential(
-                    nn.Conv1d(additional_dim, embd_dim, kernel_size=1),
-                    nn.GroupNorm(16, embd_dim),
-                    nn.ReLU(),
-                    nn.Conv1d(embd_dim, embd_dim, kernel_size=1),
-                    nn.GroupNorm(16, embd_dim),
-                    nn.ReLU()
-                )
-                
-                self.gating_embed = nn.Sequential( 
-                    nn.Conv1d(512, 128, kernel_size=1),
-                    
-                    nn.GroupNorm(16, 128),
-                    nn.ReLU(),
-                    nn.Conv1d(128, 64, kernel_size=1), 
-                    nn.GroupNorm(16, 64),
-                    nn.ReLU(), 
-                    nn.Conv1d(64, 32, kernel_size=1),   
-                    nn.GroupNorm(16, 32),
-                    nn.ReLU(), 
-                    nn.Conv1d(32, 2, kernel_size=1),  
-                    nn.Softmax(dim=1)
-                )
-                
-                self.feat_merge = nn.Sequential( 
-                    nn.Conv1d(embd_dim * 2, embd_dim, kernel_size=1),
-                    nn.GroupNorm(16, embd_dim),
-                    nn.ReLU(), 
-                    nn.Conv1d(embd_dim, embd_dim, kernel_size=1), 
-                    nn.GroupNorm(16, embd_dim),
-                    nn.ReLU(), 
-                )
-                
-                self.auto_encoder_in = nn.Sequential( 
-                    nn.Conv1d(additional_dim, 64, kernel_size=1),
-                    nn.ReLU(),
-                    nn.Conv1d(64, 32, kernel_size=1),
-                    nn.ReLU(),
-                    nn.Conv1d(32, 1, kernel_size=1), 
-                    nn.Sigmoid(),
-                )
-                 
-                self.auto_encoder_out = nn.Sequential(
-                    nn.Conv1d(32, embd_dim, kernel_size=1),
-                )
-                
+            self.additional_embed = nn.Sequential(
+                nn.Conv1d(additional_dim, embd_dim, kernel_size=1),
+                nn.GroupNorm(16, embd_dim),
+                nn.ReLU(),
+                nn.Conv1d(embd_dim, embd_dim, kernel_size=1),
+                nn.GroupNorm(16, embd_dim),
+                nn.ReLU()
+            )
+            
+            
 
         # maintain an EMA of #foreground to stabilize the loss normalizer
         # useful for small mini-batch training
@@ -546,9 +503,12 @@ class TriDet(nn.Module):
         # batched_additional_feats = batched_additional_feats * gate_sample 
 
         if self.additional_feature:
-            batched_additional_feats = self.additional_embed(batched_additional_feats)
+            batched_additional_feats = batched_additional_feats.permute(0, 3, 1, 2)
+            batched_additional_feats = self.audio_net(batched_additional_feats)
+            batched_additional_feats = batched_additional_feats.permute(0, 2, 1)
         else:
             batched_additional_feats = None
+        
 
         # forward the network (backbone -> neck -> heads)
         batched_inputs, batched_masks, batched_add_feats = self.backbone(batched_inputs, batched_masks,
@@ -562,35 +522,37 @@ class TriDet(nn.Module):
         # (shared across all samples in the mini-batch)
         points = self.point_generator(fpn_feats)
         
-        fpn_outs = [] 
         if self.additional_feature and not self.additional_only:
-            # fpn_feats = [feat + add_feat for feat, add_feat in zip(fpn_feats, batched_add_feats)]
-            for feat, add_feat in zip(fpn_feats, batched_add_feats):
-                # add_feat_gate = self.gating_embed(add_feat)
-                # add_feat = add_feat * add_feat_gate
-                if self.training:
-                    if torch.rand(1) < 0.4:
-                        add_feat = torch.zeros_like(add_feat)
-                    # else:
-                    #     feat = torch.zeros_like(feat)
-                # out_feat = torch.cat((feat, add_feat), 1)
-                gate = self.gating_embed(add_feat)
-                fused_feats = (gate[:, 0:1] * feat) + (gate[:, 1:2] * add_feat)
+            fpn_feats = [feat + add_feat for feat, add_feat in zip(fpn_feats, batched_add_feats)]
+            # for feat, add_feat in zip(fpn_feats, batched_add_feats):
+            #     # add_feat_gate = self.gating_embed(add_feat)
+            #     # add_feat = add_feat * add_feat_gate
+            #     # if self.training:
+            #     #     if torch.rand(1) < 0.4:
+            #     #         add_feat = torch.zeros_like(add_feat)
+            #     #     else:
+            #     #         feat = torch.zeros_like(feat)
+            #     # cls_gate = self.cls_gate(add_feat)
+            #     # start_gate = self.start_gate(add_feat)
+            #     # end_gate = self.end_gate(add_feat)
+            #     # reg_gate = self.reg_gate(add_feat)
+            #     # cls_feats = (cls_gate[:, 0:1] * add_feat) + (cls_gate[:, 1:2] * feat) 
+            #     # start_feats = (start_gate[:, 0:1] * add_feat) + (start_gate[:, 1:2] * feat)
+            #     # end_feats = (end_gate[:, 0:1] * add_feat) + (end_gate[:, 1:2] * feat)
+                
+            #     # fpn_cls.append(cls_feats)
+            #     # fpn_start.append(start_feats)
+            #     # fpn_end.append(end_feats)
+            #     feat += add_feat
+            #     fpn_feats.append(feat)
+                
                 # fused_feats = torch.functional.F.normalize(fused_feats)
                 # out_feat = torch.cat(fused_feats[0], fused_feats[1], dim=1) 
-                # out_feat = self.feat_merge(out_feat)
-                out_feat = fused_feats + feat
-                
+                # out_feat = fused_feats + feat
                 # out_feat = torch.functional.F.normalize(out_feat)
-                
-                    
-                fpn_outs.append(out_feat)
-        
-            fpn_feats = fpn_outs
 
         # out_cls: List[B, #cls + 1, T_i]
         out_cls_logits = self.cls_head(fpn_feats, fpn_masks)
-
 
         if self.use_trident_head:
             out_lb_logits = self.start_head(fpn_feats, fpn_masks)
@@ -640,7 +602,7 @@ class TriDet(nn.Module):
                 out_lb_logits, out_rb_logits,
             )
             return results
-
+        
     @torch.no_grad()
     def preprocessing(self, video_list, padding_val=0.0):
         """
@@ -665,13 +627,13 @@ class TriDet(nn.Module):
             batched_inputs = feats[0].new_full(batch_shape, padding_val)
 
             if self.additional_feature:
-                batch_add_shape = (len(additional_feats), additional_feats[0].shape[0], max_len)
+                batch_add_shape = (len(additional_feats), additional_feats[0].shape[0], additional_feats[0].shape[1], max_len)
                 batched_addfeat = additional_feats[0].new_full(batch_add_shape, 0.)
 
                 for feat, pad_feat, add_feat, pose_pad_feat in zip(feats, batched_inputs, additional_feats,
                                                                    batched_addfeat):
                     pad_feat[..., :feat.shape[-1]].copy_(feat)
-                    pose_pad_feat[..., :add_feat.shape[1]].copy_(add_feat)
+                    pose_pad_feat[..., :add_feat.shape[-1]].copy_(add_feat)
             else:
                 for feat, pad_feat in zip(feats, batched_inputs):
                     pad_feat[..., :feat.shape[-1]].copy_(feat)
@@ -690,13 +652,10 @@ class TriDet(nn.Module):
                 max_len = (max_len + (stride - 1)) // stride * stride
             padding_size = [0, max_len - feats_lens[0]]
             batched_inputs = F.pad(feats[0], padding_size, value=padding_val).unsqueeze(0)
-            
+
             if self.additional_feature:
-                batched_addfeat = F.pad(additional_feats[0], padding_size, value=padding_val).unsqueeze(0)
-                
-            # if self.additional_feature:
-            #     pose_padding_size = [0, max_len - additional_frames_num[0]]
-            #     batched_addfeat = F.pad(additional_feats[0], pose_padding_size, value=padding_val).unsqueeze(0)
+                pose_padding_size = [0, max_len - additional_frames_num[0]]
+                batched_addfeat = F.pad(additional_feats[0], pose_padding_size, value=padding_val).unsqueeze(0)
 
         # generate the mask
         batched_masks = torch.arange(max_len, device=batched_inputs.device)[None, :] < feats_lens[:, None]
@@ -708,6 +667,7 @@ class TriDet(nn.Module):
             batched_addfeat = None
 
         return batched_inputs, batched_masks, batched_addfeat
+
 
     @torch.no_grad()
     def label_points(self, points, gt_segments, gt_labels):

@@ -28,7 +28,7 @@ model: {
   iou_weight_power: 0.2,
   use_trident_head: True,
   sgp_mlp_dim: 768,
-  input_noise: 0.0005,
+  input_noise: 0.0006,
   additional_feature: True,
   additional_dim: 128,
   additional_only: False,
@@ -38,7 +38,7 @@ opt: {
   learning_rate: 0.0001,
   warmup_epochs: 20,
   epochs: 30,
-  weight_decay: 0.025,
+  weight_decay: 0.005,
 }
 loader: {
   batch_size: 2,
@@ -51,6 +51,9 @@ train_cfg: {
   center_sample_radius: 1.5,
   evaluate: True,
   eval_freq: 1,
+  # dropout: 0.2,
+  # droppath: 0,2,
+  # label_smoothing: 0.1
 }
 # the inference on THUMOS is quite different from EPIC-kitchens
 # a major performance gain is achieved by fusing external classification scores
