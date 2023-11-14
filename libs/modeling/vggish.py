@@ -18,15 +18,13 @@ class VGG(nn.Module):
             nn.ReLU(True))
 
     def forward(self, x):
-        
-        with torch.no_grad():
-            bs, num_frames, _, _ = x.size()
-            x = x.reshape(bs*num_frames, 1, x.size(2), x.size(3))
-            x = self.features(x)
-            x = torch.transpose(x, 1, 3)
-            x = torch.transpose(x, 1, 2)
-            x = x.contiguous()
-            x = x.view(x.size(0), -1)
+        bs, num_frames, _, _ = x.size()
+        x = x.reshape(bs*num_frames, 1, x.size(2), x.size(3))
+        x = self.features(x)
+        x = torch.transpose(x, 1, 3)
+        x = torch.transpose(x, 1, 2)
+        x = x.contiguous()
+        x = x.view(x.size(0), -1)
         return x
 
 

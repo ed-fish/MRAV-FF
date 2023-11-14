@@ -49,13 +49,21 @@ class SGPBackbone(nn.Module):
         # embedding network using convs
         self.embd = nn.ModuleList()
         self.embd_norm = nn.ModuleList()
+        self.a_embd_norm = nn.ModuleList()
+        self.a_embd = nn.ModuleList()
         for idx in range(arch[0]):
             if idx == 0:
                 in_channels = n_in
+                a_in = n_embd
             else:
                 in_channels = n_embd
             self.embd.append(MaskedConv1D(
                 in_channels, n_embd, n_embd_ks,
+                stride=1, padding=n_embd_ks // 2, bias=(not with_ln)
+            )
+            )          
+            self.a_embd.append(MaskedConv1D(
+                n_embd, n_embd, n_embd_ks,
                 stride=1, padding=n_embd_ks // 2, bias=(not with_ln)
             )
             )
@@ -63,13 +71,21 @@ class SGPBackbone(nn.Module):
                 self.embd_norm.append(
                     LayerNorm(n_embd)
                 )
+                
+                self.a_embd_norm.append(
+                    LayerNorm(n_embd)
+                )
             else:
                 self.embd_norm.append(nn.Identity())
-
+                self.a_embd_norm.append(nn.Identity())
         # stem network using (vanilla) transformer
         self.stem = nn.ModuleList()
+        self.audio_stem = nn.ModuleList()
         for idx in range(arch[1]):
             self.stem.append(
+                SGPBlock(n_embd, 1, 1, n_hidden=sgp_mlp_dim, k=k, init_conv_vars=init_conv_vars))
+            
+            self.audio_stem.append(
                 SGPBlock(n_embd, 1, 1, n_hidden=sgp_mlp_dim, k=k, init_conv_vars=init_conv_vars))
 
         # main branch using transformer with pooling
@@ -96,7 +112,7 @@ class SGPBackbone(nn.Module):
             if module.bias is not None:
                 torch.nn.init.constant_(module.bias, 0.)
 
-    def forward(self, x, mask, addtional_feature=None, additional_only=False):
+    def forward(self, x, mask, additional_feature=None, additional_only=False):
         # x: batch size, feature channel, sequence length,
         # mask: batch size, 1, sequence length (bool)
         B, C, T = x.size()
@@ -104,13 +120,16 @@ class SGPBackbone(nn.Module):
         if not additional_only:
             # embedding network
             for idx in range(len(self.embd)):
-                x, mask = self.embd[idx](x, mask)
+                x, v_mask = self.embd[idx](x, mask)
                 x = self.relu(self.embd_norm[idx](x))
+                if additional_feature is not None:
+                    additional_feature, _ = self.a_embd[idx](additional_feature, mask)
+                    additional_feature = self.relu(self.a_embd_norm[idx](additional_feature))
 
         # merge feature
-        if addtional_feature is not None:
+        if additional_feature is not None:
             if additional_only:
-                x = addtional_feature
+                x = additional_feature
 
         # training: using fixed length position embeddings
         if self.use_abs_pe and self.training:
@@ -118,6 +137,7 @@ class SGPBackbone(nn.Module):
             pe = self.pos_embd
             # add pe to x
             x = x + pe[:, :, :T] * mask.to(x.dtype)
+            additional_feature = additional_feature + pe[:,:,:T] * mask.to(x.dtype)
 
         # inference: re-interpolate position embeddings for over-length sequences
         if self.use_abs_pe and (not self.training):
@@ -127,7 +147,10 @@ class SGPBackbone(nn.Module):
             else:
                 pe = self.pos_embd
             # add pe to x
-            x = x + pe[:, :, :T] * mask.to(x.dtype)
+            x = x + pe[:, :, :T] * mask.to(x.dtype) 
+            additional_feature = additional_feature + pe[:,:,:T] * mask.to(x.dtype)
+            
+        
 
         # stem network
         for idx in range(len(self.stem)):
@@ -141,17 +164,17 @@ class SGPBackbone(nn.Module):
         out_feats += (x,)
         out_masks += (mask,)
 
-        if addtional_feature is not None:
-            out_add_feats += (addtional_feature,)
+        if additional_feature is not None:
+            out_add_feats += (additional_feature,)
 
         # main branch with downsampling
         for idx in range(len(self.branch)):
             x, mask = self.branch[idx](x, mask)
             out_feats += (x,)
             out_masks += (mask,)
-            if addtional_feature is not None:
-                addtional_feature, _ = self.additional_branch[idx](addtional_feature, mask)
-                out_add_feats += (addtional_feature,)
+            if additional_feature is not None:
+                additional_feature, _ = self.additional_branch[idx](additional_feature, mask)
+                out_add_feats += (additional_feature,)
 
         return out_feats, out_masks, out_add_feats
 

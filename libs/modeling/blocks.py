@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from .weight_init import trunc_normal_
+from einops import rearrange, repeat
 
 
 class MaskedConv1D(nn.Module):
@@ -797,7 +798,73 @@ class ConvBlock(nn.Module):
         out = self.act(out)
 
         return out, out_mask
+    
+class SGPAdapterBlock(nn.Module):
+    """
+    A simple conv block similar to the basic block used in ResNet
+    """
 
+    def __init__(
+            self,
+            n_embd,  # dimension of the input features
+            kernel_size=3,  # conv kernel size
+            n_ds_stride=1,  # downsampling stride for the current layer
+            k=1.5,  # k
+            group=1,  # group for cnn
+            n_out=None,  # output dimension, if None, set to input dim
+            n_hidden=None,  # hidden dim for mlp
+            path_pdrop=0.0,  # drop path rate
+            act_layer=nn.GELU,  # nonlinear activation used after conv, default ReLU,
+            downsample_type='max',
+            init_conv_vars=1  # init gaussian variance for the weight
+    ):
+        super().__init__()
+        # must use odd sized kernel
+        # assert (kernel_size % 2 == 1) and (kernel_size > 1)
+        # padding = kernel_size // 2
+        
+        self.down_sample_size = n_embd // 2
+        self.my_tokens = nn.Parameter(torch.rand((867, n_embd)))
+        self.gate = nn.Parameter(torch.zeros(1))
+        
+        self.gate_tk = nn.Parameter(torch.ones(1))
+        self.gate_av = nn.Parameter(torch.zeros(1))
+        
+        self.down_sampler = nn.Conv1d(n_embd, self.down_sample_size, 1, groups=n_embd, bias=False)
+        self.up_sampler = nn.Conv1d(self.down_sample_size, 1, groups=n_embd, bias=False)
+        
+
+    def forward(self, x, vis_token=None):
+        # X shape: B, C, T
+        B, C, T = x.shape
+        ### -------> high dim att
+        rep_token = repeat(self.my_tokens, 't d -> b t d', b=x.size(0))
+        att_v2tk = torch.bmm(rep_token, vis_token.squeeze(-1))
+
+        att_v2tk = F.softmax(att_v2tk, dim=-1)
+        rep_token_res = torch.bmm(att_v2tk, vis_token.squeeze(-1).permute(0,2,1))
+
+        rep_token = rep_token + rep_token_res
+        
+        att_tk2x = torch.bmm(x.squeeze(-1).permute(0,2,1), rep_token.permute(0,2,1))
+
+        att_tk2x = F.softmax(att_tk2x, dim=-1)
+        x_res = torch.bmm(att_tk2x, rep_token).permute(0,2,1).unsqueeze(-1)
+
+        x = x + self.gate_av*x_res.contiguous()
+        if self.opt.is_before_layernorm:
+            x = self.ln_before(x.squeeze(-1).permute(0,2,1)).permute(0,2,1).unsqueeze(-1)
+
+        z = self.down_sampler(x)
+        if self.use_bn:
+            z = self.bn1(z)
+        z = self.activation(z)
+        output = self.up_sampler(z)
+        if self.use_bn:
+            output = self.bn2(output)
+        output = self.gate * output
+        return output
+    
 
 class SGPBlock(nn.Module):
     """

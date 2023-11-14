@@ -159,7 +159,7 @@ def main(args):
         )
         
         #evaluate on val set    
-        if epoch > 5: 
+        if epoch > 50: 
             if cfg['train_cfg']['evaluate']:
                 print("\nStart evaluating model {:s} ...".format(cfg['model_name']))
                 start = time.time()

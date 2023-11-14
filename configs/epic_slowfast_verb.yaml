@@ -14,7 +14,7 @@ dataset: {
   default_fps: 30,
   trunc_thresh: 0.3,
   crop_ratio: [0.9, 1.0],
-  max_seq_len: 800,
+  max_seq_len: 1024,
 }
 model: {
   regression_range: [[0, 4], [2, 8], [4, 16], [8, 32], [16, 64], [32, 10000]],
@@ -46,7 +46,7 @@ train_cfg: {
   cls_prior_prob: 0.01,
   center_sample: radius,
   center_sample_radius: 1.5,
-  evaluate: True,
+  evaluate: False,
   eval_freq: 1,
 }
 test_cfg: {

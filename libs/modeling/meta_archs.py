@@ -3,7 +3,6 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.nn.utils.rnn import pad_sequence
-from transformers import ASTForAudioClassification
 from .vggish import VGGish
 
 
@@ -177,7 +176,7 @@ class AudioModel(nn.Module):
         urls = {
             'vggish': "https://github.com/harritaylor/torchvggish/releases/download/v0.1/vggish-10086976.pth"
         }
-        self.pretrain = VGGish(urls, preprocess=False, postprocess=False)
+        self.pretrain = VGGish(urls, preprocess=False, postprocess=False).eval()
 
         self.embeddings = nn.Sequential(
             nn.Linear(26624, 4096),
@@ -185,7 +184,7 @@ class AudioModel(nn.Module):
             nn.Linear(4096, 4096),
             nn.ReLU(True),
             nn.Linear(4096, 512),
-            nn.ReLU(True))
+        )
         
     def forward(self, x):
         """
@@ -193,11 +192,45 @@ class AudioModel(nn.Module):
         :return:
         """
         bs, num_frames, _, _ = x.size()
-        x = self.pretrain(x) # [bs*num_frames, 128]
-        x = self.embeddings(x)
+        chunk_size = num_frames // 4  # Set an appropriate chunk size
+
+        # Initialize an empty list to store chunk outputs
+        chunk_outputs = []
+
+        # Process each chunk
+        for i in range(0, num_frames, chunk_size):
+            # Extract the chunk
+            x_chunk = x[:, i:i+chunk_size, :, :]
+
+            # Forward pass through the network for this chunk
+            with torch.no_grad():
+                x_chunk_processed = self.pretrain(x_chunk)  # [bs*chunk_size, 128]
+            x_chunk_processed = self.embeddings(x_chunk_processed)
+            x_chunk_processed = x_chunk_processed.view(bs, -1, x_chunk_processed.size(-1))
+
+            # Store the processed chunk
+            chunk_outputs.append(x_chunk_processed)
+
+        # Concatenate all processed chunks along the frames dimension
+        x_processed = torch.cat(chunk_outputs, dim=1)
+
+        # Make sure the concatenated tensor has the expected shape
+        assert x_processed.size(1) == num_frames, "Mismatch in recombined frames length"
+
+        return x_processed
         
-        x = x.view(bs, num_frames, -1)
-        return x
+    # def forward(self, x):
+    #     """
+    #     :param x: [bs, num_frames, 96, 64]
+    #     :return:
+    #     """
+    #     bs, num_frames, _, _ = x.size()
+    #     breakpoint()
+    #     x = self.pretrain(x) # [bs*num_frames, 128]
+    #     x = self.embeddings(x)
+        
+    #     x = x.view(bs, num_frames, -1)
+    #     return x
 
 
 @register_meta_arch("TriDet")
@@ -418,8 +451,6 @@ class TriDet(nn.Module):
 
         if self.additional_feature:
             self.audio_net = AudioModel()
-
-
             self.additional_embed = nn.Sequential(
                 nn.Conv1d(additional_dim, embd_dim, kernel_size=1),
                 nn.GroupNorm(16, embd_dim),
@@ -524,32 +555,6 @@ class TriDet(nn.Module):
         
         if self.additional_feature and not self.additional_only:
             fpn_feats = [feat + add_feat for feat, add_feat in zip(fpn_feats, batched_add_feats)]
-            # for feat, add_feat in zip(fpn_feats, batched_add_feats):
-            #     # add_feat_gate = self.gating_embed(add_feat)
-            #     # add_feat = add_feat * add_feat_gate
-            #     # if self.training:
-            #     #     if torch.rand(1) < 0.4:
-            #     #         add_feat = torch.zeros_like(add_feat)
-            #     #     else:
-            #     #         feat = torch.zeros_like(feat)
-            #     # cls_gate = self.cls_gate(add_feat)
-            #     # start_gate = self.start_gate(add_feat)
-            #     # end_gate = self.end_gate(add_feat)
-            #     # reg_gate = self.reg_gate(add_feat)
-            #     # cls_feats = (cls_gate[:, 0:1] * add_feat) + (cls_gate[:, 1:2] * feat) 
-            #     # start_feats = (start_gate[:, 0:1] * add_feat) + (start_gate[:, 1:2] * feat)
-            #     # end_feats = (end_gate[:, 0:1] * add_feat) + (end_gate[:, 1:2] * feat)
-                
-            #     # fpn_cls.append(cls_feats)
-            #     # fpn_start.append(start_feats)
-            #     # fpn_end.append(end_feats)
-            #     feat += add_feat
-            #     fpn_feats.append(feat)
-                
-                # fused_feats = torch.functional.F.normalize(fused_feats)
-                # out_feat = torch.cat(fused_feats[0], fused_feats[1], dim=1) 
-                # out_feat = fused_feats + feat
-                # out_feat = torch.functional.F.normalize(out_feat)
 
         # out_cls: List[B, #cls + 1, T_i]
         out_cls_logits = self.cls_head(fpn_feats, fpn_masks)
