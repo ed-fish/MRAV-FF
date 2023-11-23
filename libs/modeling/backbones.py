@@ -83,7 +83,7 @@ class SGPBackbone(nn.Module):
         if self.additional_feature:
             self.additional_branch = nn.ModuleList()
             for idx in range(arch[2]):
-                self.additional_branch.append(SGPBlock(n_embd, self.sgp_win_size[1+idx], self.scale_factor, path_pdrop=path_pdrop,
+                self.additional_branch.append(SGPBlock(n_embd, 1, self.scale_factor, path_pdrop=path_pdrop,
                                                        n_hidden=sgp_mlp_dim, downsample_type=downsample_type, k=1.5,
                                                        init_conv_vars=init_conv_vars))
 

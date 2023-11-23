@@ -874,7 +874,7 @@ class SGPBlock(nn.Module):
             act_layer(),
             nn.Conv1d(n_hidden, n_out, 1, groups=group),
         )
-
+        
         # drop path
         if path_pdrop > 0.0:
             self.drop_path_out = AffineDropPath(n_embd, drop_prob=path_pdrop)

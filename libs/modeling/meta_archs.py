@@ -436,44 +436,28 @@ class TriDet(nn.Module):
                     nn.ReLU()
                 )
                 
-                self.gating_embed = nn.Sequential( 
-                    nn.Conv1d(512, 128, kernel_size=1),
-                    
-                    nn.GroupNorm(16, 128),
-                    nn.ReLU(),
-                    nn.Conv1d(128, 64, kernel_size=1), 
-                    nn.GroupNorm(16, 64),
-                    nn.ReLU(), 
-                    nn.Conv1d(64, 32, kernel_size=1),   
-                    nn.GroupNorm(16, 32),
-                    nn.ReLU(), 
-                    nn.Conv1d(32, 2, kernel_size=1),  
-                    nn.Softmax(dim=1)
-                )
                 
                 self.feat_merge = nn.Sequential( 
-                    nn.Conv1d(embd_dim * 2, embd_dim, kernel_size=1),
-                    nn.GroupNorm(16, embd_dim),
+                    nn.Conv1d(embd_dim, embd_dim // 2, kernel_size=1),
                     nn.ReLU(), 
-                    nn.Conv1d(embd_dim, embd_dim, kernel_size=1), 
-                    nn.GroupNorm(16, embd_dim),
+                    nn.Conv1d(embd_dim // 2, embd_dim // 2, kernel_size=1), 
+                    nn.ReLU(),  
+                    nn.Conv1d(embd_dim // 2, embd_dim, kernel_size=1), 
                     nn.ReLU(), 
                 )
                 
-                self.auto_encoder_in = nn.Sequential( 
-                    nn.Conv1d(additional_dim, 64, kernel_size=1),
-                    nn.ReLU(),
-                    nn.Conv1d(64, 32, kernel_size=1),
-                    nn.ReLU(),
-                    nn.Conv1d(32, 1, kernel_size=1), 
-                    nn.Sigmoid(),
-                )
-                 
-                self.auto_encoder_out = nn.Sequential(
-                    nn.Conv1d(32, embd_dim, kernel_size=1),
+                
+                self.feat_merge2 = nn.Sequential( 
+                    nn.Conv1d(embd_dim, embd_dim // 2, kernel_size=1),
+                    nn.ReLU(), 
+                    nn.Conv1d(embd_dim // 2, embd_dim // 2, kernel_size=1), 
+                    nn.ReLU(),  
+                    nn.Conv1d(embd_dim // 2, embd_dim, kernel_size=1), 
+                    nn.ReLU(), 
                 )
                 
-
+                
+        self.gate_norm = nn.GroupNorm(16, 512)
         # maintain an EMA of #foreground to stabilize the loss normalizer
         # useful for small mini-batch training
         self.loss_normalizer = train_cfg['init_loss_norm']
@@ -568,39 +552,40 @@ class TriDet(nn.Module):
             for feat, add_feat in zip(fpn_feats, batched_add_feats):
                 # add_feat_gate = self.gating_embed(add_feat)
                 # add_feat = add_feat * add_feat_gate
-                if self.training:
-                    if torch.rand(1) < 0.4:
-                        add_feat = torch.zeros_like(add_feat)
+                # if self.training:
+                #     if torch.rand(1) < 0.4:
+                #         add_feat = torch.zeros_like(add_feat)
                     # else:
                     #     feat = torch.zeros_like(feat)
-                # out_feat = torch.cat((feat, add_feat), 1)
-                gate = self.gating_embed(add_feat)
-                fused_feats = (gate[:, 0:1] * feat) + (gate[:, 1:2] * add_feat)
-                # fused_feats = torch.functional.F.normalize(fused_feats)
+                out_feat = feat + add_feat
+                out_feat = torch.functional.F.normalize(out_feat, p=2)
+                fused_feats = self.feat_merge(out_feat)
+                fused_feats = feat + fused_feats
+                fused_feats = self.feat_merge2(fused_feats)
+                fused_feats = feat + fused_feats
+                # fused_feats = (gate[:, 0:1] * feat) + (gate[:, 1:2] * add_feat)
+                # fused_feats = self.gate_norm(fused_feats)
+                # fused_feats = torch.functional.F.normalize(fused_feats, p=2)
                 # out_feat = torch.cat(fused_feats[0], fused_feats[1], dim=1) 
                 # out_feat = self.feat_merge(out_feat)
-                out_feat = fused_feats + feat
-                
+                # out_feat = fused_feats + feat
                 # out_feat = torch.functional.F.normalize(out_feat)
-                
                     
-                fpn_outs.append(out_feat)
+                fpn_outs.append(fused_feats)
         
-            fpn_feats = fpn_outs
-
+            # fpn_feats = fpn_outs
         # out_cls: List[B, #cls + 1, T_i]
         out_cls_logits = self.cls_head(fpn_feats, fpn_masks)
 
-
         if self.use_trident_head:
-            out_lb_logits = self.start_head(fpn_feats, fpn_masks)
-            out_rb_logits = self.end_head(fpn_feats, fpn_masks)
+            out_lb_logits = self.start_head(fpn_outs, fpn_masks)
+            out_rb_logits = self.end_head(fpn_outs, fpn_masks)
         else:
             out_lb_logits = None
             out_rb_logits = None
 
         # out_offset: List[B, 2, T_i]
-        out_offsets = self.reg_head(fpn_feats, fpn_masks)
+        out_offsets = self.reg_head(fpn_outs, fpn_masks)
 
         # permute the outputs
         # out_cls: F List[B, #cls, T_i] -> F List[B, T_i, #cls]
@@ -809,7 +794,6 @@ class TriDet(nn.Module):
             multi_target /= concat_points[:, 3, None, None]
 
             return cls_targets, multi_target
-
 
         else:
             # F T x N -> F T
